@@ -4,7 +4,7 @@
 
    `The result of 17.4 divided by 3.9 is 4.461538461538462`
 
-2. Lege eine Variable firstname und eine Varialbe lastname an. Weise den
+2. Lege eine Variable `firstName` und eine Varialbe `lastName` an. Weise den
    Variablen deinen Namen zu. Gib folgendes aus:
 
    `Ich heiße VORNAME NACHNAME`

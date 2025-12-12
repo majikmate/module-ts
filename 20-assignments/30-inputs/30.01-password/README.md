@@ -6,8 +6,8 @@ Schreibe ein Programm, dass überprüft, ob ein eingegebenes Passwort korrekt is
 
 - Deklariere die Variablen `input` und `password` und setze `password` auf das
   geheime Passwort
-- Benutze `prompt` um ein Password über die Kommandozeile in `input` zu
-  speichern
+- Benutze `prompt` um ein Password über die Eingabe in der Kommandozeile in
+  `input` zu speichern
 - Benutze das if statement und prüfe:
   - Wenn `input` das gleiche enthält wie `password` dann gib `Access granted`
     aus
