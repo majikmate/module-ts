@@ -32,7 +32,7 @@ Die folgenden Aufgaben helfen beim Üben und Vertiefen der Lerninhalte:
 
 ## AVIVA-Unterrichtssitzung
 
-- [AVIVA Session: Zufallszahlen](../../20-sessions/40-random-numbers-session.md)
+- [AVIVA Session: Zufallszahlen](../../20-sessions/40-random-numbers-session/README.md)
 
 ---
 

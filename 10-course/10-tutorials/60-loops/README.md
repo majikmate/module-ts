@@ -38,7 +38,7 @@ Die folgenden Aufgaben helfen beim Üben und Vertiefen der Lerninhalte:
 
 ## AVIVA-Unterrichtssitzung
 
-- [AVIVA Session: Schleifen](../../20-sessions/60-loops-session.md)
+- [AVIVA Session: Schleifen](../../20-sessions/60-loops-session/README.md)
 
 ---
 

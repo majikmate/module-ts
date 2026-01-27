@@ -33,7 +33,7 @@ _Aufgaben werden noch hinzugefügt._
 
 ## AVIVA-Unterrichtssitzung
 
-- [AVIVA Session: Functions](../../20-sessions/80-functions-session.md)
+- [AVIVA Session: Functions](../../20-sessions/80-functions-session/README.md)
 
 ---
 

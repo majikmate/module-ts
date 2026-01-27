@@ -37,7 +37,7 @@ Die folgenden Aufgaben helfen beim Üben und Vertiefen der Lerninhalte:
 
 ## AVIVA-Unterrichtssitzung
 
-- [AVIVA Session: Logische Operatoren und Ausdrücke](../../20-sessions/50-boolean-statements-session.md)
+- [AVIVA Session: Logische Operatoren und Ausdrücke](../../20-sessions/50-boolean-statements-session/README.md)
 
 ---
 

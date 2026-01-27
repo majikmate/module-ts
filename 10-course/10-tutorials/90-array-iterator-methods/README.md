@@ -37,7 +37,7 @@ _Aufgaben werden noch hinzugefügt._
 
 ## AVIVA-Unterrichtssitzung
 
-- [AVIVA Session: Array Iterator Methods](../../20-sessions/90-array-iterator-methods-session.md)
+- [AVIVA Session: Array Iterator Methods](../../20-sessions/90-array-iterator-methods-session/README.md)
 
 ---
 

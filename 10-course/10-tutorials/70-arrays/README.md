@@ -37,7 +37,7 @@ Die folgenden Aufgaben helfen beim Üben und Vertiefen der Lerninhalte:
 
 ## AVIVA-Unterrichtssitzung
 
-- [AVIVA Session: Arrays](../../20-sessions/70-arrays-session.md)
+- [AVIVA Session: Arrays](../../20-sessions/70-arrays-session/README.md)
 
 ---
 

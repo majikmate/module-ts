@@ -23,7 +23,7 @@
 
 ## AVIVA-Unterrichtssitzung
 
-- [AVIVA Session: Visual Studio Code](../../20-sessions/00-vscode-session.md)
+- [AVIVA Session: Visual Studio Code](../../20-sessions/00-vscode-session/README.md)
 
 ---
 

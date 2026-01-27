@@ -35,7 +35,7 @@ Die folgenden Aufgaben helfen beim Üben und Vertiefen der Lerninhalte:
 
 ## AVIVA-Unterrichtssitzung
 
-- [AVIVA Session: Verzweigungen und Gültigkeitsbereiche](../../20-sessions/20-scopes-and-if-statements-session.md)
+- [AVIVA Session: Verzweigungen und Gültigkeitsbereiche](../../20-sessions/20-scopes-and-if-statements-session/README.md)
 
 ---
 

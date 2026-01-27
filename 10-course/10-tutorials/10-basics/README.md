@@ -33,7 +33,7 @@ Die folgenden Aufgaben helfen beim Üben und Vertiefen der Lerninhalte:
 
 ## AVIVA-Unterrichtssitzung
 
-- [AVIVA Session: Grundlagen der Programmierung](../../20-sessions/10-basics-session.md)
+- [AVIVA Session: Grundlagen der Programmierung](../../20-sessions/10-basics-session/README.md)
 
 ---
 
