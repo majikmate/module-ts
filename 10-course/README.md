@@ -7,7 +7,7 @@ Unterrichtssitzungen.
 
 - [Tutorials](10-tutorials/README.md)
   - Lernpfad mit Tutorials und Lernmaterialien, organisiert nach Themen
-- [Sitzungen](20-sessions/README.md)
+- [Sessions](20-sessions/README.md)
   - Interaktive Programmier-Sessions und praktische Beispiele aus dem Unterricht
 
 ---
