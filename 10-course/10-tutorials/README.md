@@ -48,7 +48,7 @@ Funktionsdefinition, Parameter, Rückgabewerte und Arrow-Funktionen
 
 ### [90 - Array-Iterator-Methoden](90-array-iterator-methods/README.md)
 
-Höhere Funktionen für Arrays: map, filter, forEach, find, some, every und reduce
+Höhere Funktionen für Arrays: forEach, find, some, every, filter und map
 
 ---
 

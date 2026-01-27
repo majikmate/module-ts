@@ -16,7 +16,7 @@ Summe aller Elemente berechnet und ausgibt.
 - Verwende `Math.random()` oder `Math.floor(Math.random() * 100)` um
   Zufallszahlen zu generieren
 - Du kannst eine Schleife verwenden, um die Summe zu berechnen
-- Oder verwende die `forEach()`- oder `reduce()`-Methode für Arrays
+- Oder verwende die `forEach()`-Methode für Arrays
 
 ### 3. Beispiel Ausgabe
 
