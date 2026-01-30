@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check if this repo is a template copy
-        id: template-check
+      - name: Validate sync prerequisites
+        id: validate
         uses: actions/github-script@v7
         with:
           script: |
@@ -24,17 +24,23 @@ jobs:
             
             // Check if this repo is a fork
             if (repo.fork) {
-              core.info('This repository is a fork. Skipping sync to prevent duplicate syncs.');
-              core.setOutput('is-template-copy', 'false');
-              core.setOutput('is-fork', 'true');
+              core.info('⏭️ This repository is a fork. Skipping sync to prevent duplicate syncs.');
+              core.setOutput('should-sync', 'false');
               return;
             }
             
             // Check if this repo was created from a template
             if (!repo.template_repository) {
-              core.info('This repository was not created from a template. Skipping sync.');
-              core.setOutput('is-template-copy', 'false');
-              core.setOutput('is-fork', 'false');
+              core.info('⏭️ This repository was not created from a template. Skipping sync.');
+              core.setOutput('should-sync', 'false');
+              return;
+            }
+            
+            // Check if token is configured
+            const hasToken = '${{ secrets.TEMPLATE_SYNC_TOKEN }}' !== '';
+            if (!hasToken) {
+              core.info('⏭️ TEMPLATE_SYNC_TOKEN is not configured. Skipping sync.');
+              core.setOutput('should-sync', 'false');
               return;
             }
             
@@ -43,57 +49,34 @@ jobs:
             const [templateOwner, templateRepo] = templateFullName.split('/');
             
             core.info(`✅ This repository was created from template: ${templateFullName}`);
-            core.setOutput('is-template-copy', 'true');
-            core.setOutput('is-fork', 'false');
+            core.setOutput('should-sync', 'true');
             core.setOutput('template-owner', templateOwner);
             core.setOutput('template-repo', templateRepo);
 
-      - name: Skip if not a template copy
-        if: steps.template-check.outputs.is-template-copy != 'true'
-        run: |
-          if [ "${{ steps.template-check.outputs.is-fork }}" == "true" ]; then
-            echo "This repository is a fork. Workflow skipped to prevent duplicate syncs."
-          else
-            echo "This workflow only runs in repositories created from a template."
-          fi
-          exit 0
-      - name: Check if token secret exists
-        if: steps.template-check.outputs.is-template-copy == 'true'
-        id: secretcheck
-        run: |
-          if [ -z "${{ secrets.TEMPLATE_SYNC_TOKEN }}" ]; then
-            echo "missing=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "missing=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Skip (no token configured in this repo)
-        if: steps.template-check.outputs.is-template-copy == 'true' && steps.secretcheck.outputs.missing == 'true'
-        run: |
-          echo "TEMPLATE_SYNC_TOKEN is not set in this repository. Skipping sync."
-          exit 0
-
       - name: Checkout this repo (B/C)
-        if: steps.template-check.outputs.is-template-copy == 'true' && steps.secretcheck.outputs.missing == 'false'
+        if: steps.validate.outputs.should-sync == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Configure Git identity
+        if: steps.validate.outputs.should-sync == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Add template remote (A) and fetch
+        if: steps.validate.outputs.should-sync == 'true'
         env:
           TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
-          TEMPLATE_OWNER: ${{ steps.template-check.outputs.template-owner }}
-          TEMPLATE_REPO: ${{ steps.template-check.outputs.template-repo }}
+          TEMPLATE_OWNER: ${{ steps.validate.outputs.template-owner }}
+          TEMPLATE_REPO: ${{ steps.validate.outputs.template-repo }}
         run: |
           git remote add template "https://x-access-token:${TOKEN}@github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git"
           git fetch template --prune
 
       - name: Check if we are ahead of template/main
+        if: steps.validate.outputs.should-sync == 'true'
         id: ahead
         run: |
           # How many commits exist on our main that are not in template/main?
@@ -101,31 +84,29 @@ jobs:
           echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
           echo "Commits ahead of template/main: $AHEAD"
 
-      - name: Stop if nothing to sync
-        if: steps.ahead.outputs.ahead == '0'
-        run: |
-          echo "No new commits compared to template/main. Nothing to sync."
-          exit 0
-
       - name: Create sync branch locally
+        if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
+        id: create-branch
         run: |
           BRANCH_NAME="sync-from-${{ github.repository_owner }}-${{ github.event.repository.name }}-$(date +%Y%m%d-%H%M%S)"
-          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+          echo "branch-name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           git checkout -b "$BRANCH_NAME"
 
       - name: Push sync branch to template repo (A)
+        if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
         run: |
-          git push template HEAD:${{ env.BRANCH_NAME }}
+          git push template HEAD:${{ steps.create-branch.outputs.branch-name }}
 
       - name: Create PR in template repo (A)
+        if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
         id: create-pr
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
           script: |
-            const owner = '${{ steps.template-check.outputs.template-owner }}';
-            const repo  = '${{ steps.template-check.outputs.template-repo }}';
-            const head  = process.env.BRANCH_NAME; // branch exists in A (we pushed it there)
+            const owner = '${{ steps.validate.outputs.template-owner }}';
+            const repo  = '${{ steps.validate.outputs.template-repo }}';
+            const head  = '${{ steps.create-branch.outputs.branch-name }}'; // branch exists in A (we pushed it there)
             const base  = 'main';
 
             // If PR already exists for this branch, update it
@@ -179,8 +160,8 @@ jobs:
         with:
           github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
           script: |
-            const owner = '${{ steps.template-check.outputs.template-owner }}';
-            const repo  = '${{ steps.template-check.outputs.template-repo }}';
+            const owner = '${{ steps.validate.outputs.template-owner }}';
+            const repo  = '${{ steps.validate.outputs.template-repo }}';
             const pull_number = ${{ steps.create-pr.outputs.pr-number }};
 
             // Poll for mergeable state with retries (GitHub needs time to compute)
@@ -227,9 +208,9 @@ jobs:
                 try {
                   await github.rest.git.deleteRef({
                     owner, repo,
-                    ref: `heads/${process.env.BRANCH_NAME}`
+                    ref: `heads/${{ steps.create-branch.outputs.branch-name }}`
                   });
-                  core.info(`🧹 Deleted branch: ${process.env.BRANCH_NAME}`);
+                  core.info(`🧹 Deleted branch: ${{ steps.create-branch.outputs.branch-name }}`);
                 } catch (error) {
                   core.warning(`Could not delete branch: ${error.message}`);
                 }
@@ -261,22 +242,23 @@ jobs:
             }
 
       - name: Cleanup on failure
-        if: failure() && env.BRANCH_NAME
+        if: failure() && steps.create-branch.outputs.branch-name
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
           script: |
-            const owner = '${{ steps.template-check.outputs.template-owner }}';
-            const repo  = '${{ steps.template-check.outputs.template-repo }}';
+            const owner = '${{ steps.validate.outputs.template-owner }}';
+            const repo  = '${{ steps.validate.outputs.template-repo }}';
+            const branchName = '${{ steps.create-branch.outputs.branch-name }}';
             
-            if (process.env.BRANCH_NAME) {
+            if (branchName) {
               try {
                 await github.rest.git.deleteRef({
                   owner,
                   repo,
-                  ref: `heads/${process.env.BRANCH_NAME}`
+                  ref: `heads/${branchName}`
                 });
-                core.info(`🧹 Cleaned up failed branch: ${process.env.BRANCH_NAME}`);
+                core.info(`🧹 Cleaned up failed branch: ${branchName}`);
               } catch (error) {
                 core.info('No cleanup needed or branch already deleted');
               }
