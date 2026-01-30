@@ -36,13 +36,12 @@ jobs:
                 const message = commit.commit.message;
                 
                 // Check if this commit was made by our sync workflows
+                // Direct merges via repos.merge API are authored by the token user, not github-actions[bot]
                 const isSyncCommit = (
-                  author === 'github-actions[bot]' &&
-                  (
-                    message.includes('Sync commit history from template') ||
-                    message.includes('Merge updates from template repository') ||
-                    message.includes('Sync changes from')
-                  )
+                  message.includes('Sync commit history from template') ||
+                  message.includes('Merge updates from template repository') ||
+                  message.includes('Sync changes from') ||
+                  message.includes('syncing commit history only')
                 );
                 
                 if (isSyncCommit) {
