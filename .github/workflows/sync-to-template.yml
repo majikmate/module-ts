@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 concurrency:
   group: sync-to-template-${{ github.repository }}
   cancel-in-progress: false
@@ -69,6 +75,26 @@ jobs:
             core.setOutput('template-owner', templateOwner);
             core.setOutput('template-repo', templateRepo);
 
+      - name: Query template default branch
+        if: steps.validate.outputs.should-sync == 'true'
+        id: template-branch
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          script: |
+            try {
+              const { data: templateRepo } = await github.rest.repos.get({
+                owner: '${{ steps.validate.outputs.template-owner }}',
+                repo: '${{ steps.validate.outputs.template-repo }}'
+              });
+              const defaultBranch = templateRepo.default_branch;
+              core.info(`✅ Template default branch: ${defaultBranch}`);
+              core.setOutput('default-branch', defaultBranch);
+            } catch (error) {
+              core.warning(`Could not query default branch, using 'main': ${error.message}`);
+              core.setOutput('default-branch', 'main');
+            }
+
       - name: Validate token permissions
         if: steps.validate.outputs.should-sync == 'true'
         uses: actions/github-script@v7
@@ -105,7 +131,7 @@ jobs:
         if: steps.validate.outputs.should-sync == 'true'
         uses: actions/checkout@v4
         with:
-          fetch-depth: 100
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Configure Git identity
@@ -125,33 +151,20 @@ jobs:
         run: |
           # Configure git to use credentials from environment without prompting
           git config --local credential.helper '!f() { echo "username=${GIT_USERNAME}"; echo "password=${GIT_PASSWORD}"; }; f'
-          git fetch "https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git" main:refs/remotes/template/main
+          TEMPLATE_BRANCH="${{ steps.template-branch.outputs.default-branch }}"
+          git fetch "https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git" "${TEMPLATE_BRANCH}:refs/remotes/template/${TEMPLATE_BRANCH}"
           # Clear credential helper immediately
           git config --local --unset credential.helper
 
-      - name: Check if we are ahead of template/main
+      - name: Check if we are ahead of template default branch
         if: steps.validate.outputs.should-sync == 'true'
         id: ahead
         run: |
-          # How many commits exist on our main that are not in template/main?
-          AHEAD=$(git rev-list --count refs/remotes/template/main..HEAD)
+          # How many commits exist on our branch that are not in template's default branch?
+          TEMPLATE_BRANCH="${{ steps.template-branch.outputs.default-branch }}"
+          AHEAD=$(git rev-list --count "refs/remotes/template/${TEMPLATE_BRANCH}"..HEAD)
           echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
-          echo "Commits ahead of template/main: $AHEAD"
-
-      - name: Validate commit count
-        if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
-        run: |
-          AHEAD=${{ steps.ahead.outputs.ahead }}
-          MAX_COMMITS=50
-          
-          if [ "$AHEAD" -gt "$MAX_COMMITS" ]; then
-            echo "::error::Too many commits to sync ($AHEAD). Maximum allowed is $MAX_COMMITS."
-            echo "::error::Consider syncing in smaller batches or performing a manual sync."
-            echo "::error::This limit prevents resource exhaustion and timeout issues."
-            exit 1
-          fi
-          
-          echo "✅ Commit count ($AHEAD) is within acceptable limits (max: $MAX_COMMITS)"
+          echo "Commits ahead of template/${TEMPLATE_BRANCH}: $AHEAD"
 
       - name: Create sync branch locally
         if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
@@ -199,17 +212,7 @@ jobs:
             const owner = '${{ steps.validate.outputs.template-owner }}';
             const repo  = '${{ steps.validate.outputs.template-repo }}';
             const head  = '${{ steps.create-branch.outputs.branch-name }}';
-            
-            // Query actual default branch instead of hardcoding 'main'
-            let base;
-            try {
-              const { data: templateRepo } = await github.rest.repos.get({ owner, repo });
-              base = templateRepo.default_branch;
-              core.info(`Using default branch: ${base}`);
-            } catch (error) {
-              core.warning(`Could not query default branch, using 'main': ${error.message}`);
-              base = 'main';
-            }
+            const base  = '${{ steps.template-branch.outputs.default-branch }}';
             
             // Sanitize all user-controlled inputs
             const sourceOwner = sanitize(context.repo.owner);
@@ -369,6 +372,23 @@ jobs:
             } else {
               core.warning(`⚠️ Unexpected mergeable state: ${prData.mergeable_state}. Manual review recommended.`);
             }
+
+      - name: Summary
+        if: steps.validate.outputs.should-sync == 'true'
+        run: |
+          echo "## 🔄 Template Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.ahead.outputs.ahead }}" = "0" ]; then
+            echo "✅ Repository is already synchronized with template" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "📤 Pushed ${{ steps.ahead.outputs.ahead }} commit(s) to template" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ -n "${{ steps.create-pr.outputs.pr-number }}" ]; then
+              echo "**Pull Request:** #${{ steps.create-pr.outputs.pr-number }}" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
 
       - name: Cleanup on failure
         if: failure() && steps.create-branch.outputs.branch-name
