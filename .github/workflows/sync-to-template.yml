@@ -160,7 +160,7 @@ jobs:
             core.setOutput('pr-number', pr.number);
 
       - name: Auto-merge PR if no conflicts
-        if: steps.template-check.outputs.is-template-copy == 'true' && steps.secretcheck.outputs.missing == 'false' && steps.create-pr.outputs.pr-number
+        if: steps.validate.outputs.should-sync == 'true' && steps.create-pr.outputs.pr-number
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
