@@ -1,4 +1,4 @@
-name: Sync changes to template (open PR in A)
+name: Sync changes to template via PR automerge
 
 on:
   push:
