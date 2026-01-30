@@ -10,6 +10,8 @@ in TypeScript.
 - [10.02 Strings und Zahlen](10.02-strings-and-numbers/README.md) - Datentypen
   verstehen
 - [10.03 Berechnungen](10.03-calculations/README.md) - Mathematische Operationen
+- [10.04 Template Strings](10.04-template-strings/README.md) - Moderne
+  String-Formatierung
 
 ## Lernziele
 
@@ -22,6 +24,7 @@ Nach Abschluss dieser Aufgaben kannst du:
 - Grundlegende mathematische Operationen durchführen (+, -, *, /, %)
 - Werte mit `console.log()` ausgeben
 - Typannotationen in TypeScript verwenden
+- Template Strings für String-Formatierung verwenden
 
 ## Verwendung
 
