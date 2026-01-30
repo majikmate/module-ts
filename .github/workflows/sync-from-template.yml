@@ -1,0 +1,291 @@
+name: Sync changes from template
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-from-template-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  sync-from-template:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate sync prerequisites
+        id: validate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: repo } = await github.rest.repos.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            
+            // Check if this repo was created from a template
+            if (!repo.template_repository) {
+              core.info('⏭️ This repository was not created from a template. Skipping sync.');
+              core.setOutput('should-sync', 'false');
+              return;
+            }
+            
+            // Check if token is configured (use GITHUB_TOKEN for reading, PAT optional for PR creation)
+            const hasToken = '${{ secrets.TEMPLATE_SYNC_TOKEN }}' !== '';
+            if (!hasToken) {
+              core.info('⏭️ TEMPLATE_SYNC_TOKEN is not configured. Using GITHUB_TOKEN (limited permissions).');
+            }
+            
+            // Extract template owner and repo
+            const templateFullName = repo.template_repository.full_name;
+            const parts = templateFullName.split('/');
+            
+            // Validate template repository format
+            if (parts.length !== 2 || !parts[0] || !parts[1]) {
+              core.setFailed(`Invalid template repository format: ${templateFullName}`);
+              core.setOutput('should-sync', 'false');
+              return;
+            }
+            
+            const [templateOwner, templateRepo] = parts;
+            
+            // Validate GitHub naming rules (alphanumeric, hyphens, underscores, dots)
+            if (!/^[a-zA-Z0-9._-]+$/.test(templateOwner) || !/^[a-zA-Z0-9._-]+$/.test(templateRepo)) {
+              core.setFailed('Invalid characters in template repository name');
+              core.setOutput('should-sync', 'false');
+              return;
+            }
+            
+            core.info(`✅ This repository was created from template: ${templateFullName}`);
+            core.setOutput('should-sync', 'true');
+            core.setOutput('template-owner', templateOwner);
+            core.setOutput('template-repo', templateRepo);
+
+      - name: Checkout this repo
+        if: steps.validate.outputs.should-sync == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history needed to compare with template
+          token: ${{ secrets.TEMPLATE_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git identity
+        if: steps.validate.outputs.should-sync == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch template repository
+        if: steps.validate.outputs.should-sync == 'true'
+        env:
+          TEMPLATE_OWNER: ${{ steps.validate.outputs.template-owner }}
+          TEMPLATE_REPO: ${{ steps.validate.outputs.template-repo }}
+        run: |
+          # Fetch template without authentication (public repos)
+          # For private templates, you'd need to use TEMPLATE_SYNC_TOKEN
+          git remote add template "https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git" || true
+          git fetch template main:refs/remotes/template/main
+
+      - name: Check if template has new changes
+        if: steps.validate.outputs.should-sync == 'true'
+        id: check-changes
+        run: |
+          # Get the merge-base (common ancestor)
+          MERGE_BASE=$(git merge-base HEAD refs/remotes/template/main)
+          
+          # Check if template has commits we don't have
+          BEHIND=$(git rev-list --count ${MERGE_BASE}..refs/remotes/template/main)
+          
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "merge-base=$MERGE_BASE" >> "$GITHUB_OUTPUT"
+          
+          if [ "$BEHIND" -eq "0" ]; then
+            echo "✅ Already up-to-date with template"
+          else
+            echo "📥 Template has $BEHIND new commit(s)"
+          fi
+
+      - name: Create sync branch
+        if: steps.validate.outputs.should-sync == 'true' && steps.check-changes.outputs.behind != '0'
+        id: create-branch
+        run: |
+          # Use timestamp and random ID for uniqueness
+          RANDOM_ID=$(openssl rand -hex 4)
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          BRANCH_NAME="sync-template-${TIMESTAMP}-${RANDOM_ID}"
+          
+          echo "branch-name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          
+          # Create new branch from current HEAD
+          git checkout -b "$BRANCH_NAME"
+          
+          echo "✅ Created branch: $BRANCH_NAME"
+
+      - name: Merge template changes
+        if: steps.validate.outputs.should-sync == 'true' && steps.check-changes.outputs.behind != '0'
+        id: merge
+        run: |
+          set +e  # Don't exit on error, we'll handle it
+          
+          # Attempt to merge template changes
+          git merge refs/remotes/template/main --no-edit -m "Merge updates from template repository"
+          MERGE_EXIT=$?
+          
+          if [ $MERGE_EXIT -eq 0 ]; then
+            echo "merge-status=success" >> $GITHUB_OUTPUT
+            echo "✅ Template changes merged successfully"
+          else
+            # Check if there are conflicts
+            if git ls-files -u | grep -q .; then
+              echo "merge-status=conflicts" >> $GITHUB_OUTPUT
+              echo "⚠️ Merge conflicts detected"
+              
+              # Abort the merge to clean state
+              git merge --abort
+              
+              # Create a merge commit with conflicts marked
+              git merge refs/remotes/template/main --no-commit --no-ff || true
+              
+              # List conflicts
+              echo "## Conflicting files:" >> $GITHUB_STEP_SUMMARY
+              git diff --name-only --diff-filter=U >> $GITHUB_STEP_SUMMARY
+            else
+              echo "merge-status=error" >> $GITHUB_OUTPUT
+              echo "❌ Merge failed with unexpected error"
+              exit 1
+            fi
+          fi
+
+      - name: Push sync branch
+        if: steps.validate.outputs.should-sync == 'true' && steps.check-changes.outputs.behind != '0'
+        run: |
+          git push origin ${{ steps.create-branch.outputs.branch-name }}
+
+      - name: Create Pull Request
+        if: steps.validate.outputs.should-sync == 'true' && steps.check-changes.outputs.behind != '0'
+        id: create-pr
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const mergeStatus = '${{ steps.merge.outputs.merge-status }}';
+            const templateOwner = '${{ steps.validate.outputs.template-owner }}';
+            const templateRepo = '${{ steps.validate.outputs.template-repo }}';
+            const behindCount = '${{ steps.check-changes.outputs.behind }}';
+            
+            let title, body;
+            
+            if (mergeStatus === 'conflicts') {
+              title = `⚠️ Sync from template (${behindCount} commits) - HAS CONFLICTS`;
+              body = [
+                `## ⚠️ Template Sync with Conflicts`,
+                ``,
+                `This PR syncs ${behindCount} new commit(s) from the template repository, but **has merge conflicts** that require manual resolution.`,
+                ``,
+                `### Source`,
+                `- Template: \`${templateOwner}/${templateRepo}\``,
+                `- Branch: \`main\``,
+                ``,
+                `### Action Required`,
+                `1. Check out this branch locally`,
+                `2. Resolve merge conflicts`,
+                `3. Commit the resolved changes`,
+                `4. Push to update this PR`,
+                ``,
+                `### Commands`,
+                `\`\`\`bash`,
+                `git fetch origin`,
+                `git checkout ${{ steps.create-branch.outputs.branch-name }}`,
+                `git merge template/main`,
+                `# Resolve conflicts in your editor`,
+                `git add .`,
+                `git commit`,
+                `git push`,
+                `\`\`\``,
+                ``,
+                `---`,
+                `🤖 *Automatically created by template sync workflow*`
+              ].join('\n');
+            } else {
+              title = `Sync from template (${behindCount} commits)`;
+              body = [
+                `## 📥 Template Sync`,
+                ``,
+                `This PR syncs ${behindCount} new commit(s) from the template repository.`,
+                ``,
+                `### Source`,
+                `- Template: \`${templateOwner}/${templateRepo}\``,
+                `- Branch: \`main\``,
+                ``,
+                `### Status`,
+                `✅ No merge conflicts detected - ready to merge`,
+                ``,
+                `---`,
+                `🤖 *Automatically created by template sync workflow*`
+              ].join('\n');
+            }
+            
+            try {
+              const { data: pr } = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                head: '${{ steps.create-branch.outputs.branch-name }}',
+                base: 'main',
+                body: body
+              });
+              
+              core.info(`✅ Created PR #${pr.number}: ${pr.html_url}`);
+              core.setOutput('pr-number', pr.number);
+              core.setOutput('pr-url', pr.html_url);
+              
+              // Add labels if possible
+              if (mergeStatus === 'conflicts') {
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    labels: ['merge-conflict', 'template-sync']
+                  });
+                } catch (error) {
+                  core.info('Could not add labels (labels may not exist)');
+                }
+              }
+              
+            } catch (error) {
+              if (error.status === 422 && error.message.includes('pull request already exists')) {
+                core.info('⏭️ A pull request already exists for this branch');
+              } else {
+                core.setFailed(`Failed to create PR: ${error.message}`);
+                throw error;
+              }
+            }
+
+      - name: Summary
+        if: steps.validate.outputs.should-sync == 'true'
+        run: |
+          echo "## 🔄 Template Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.check-changes.outputs.behind }}" = "0" ]; then
+            echo "✅ Repository is up-to-date with template" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "📥 Synced ${{ steps.check-changes.outputs.behind }} commit(s) from template" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ -n "${{ steps.create-pr.outputs.pr-url }}" ]; then
+              echo "**Pull Request:** ${{ steps.create-pr.outputs.pr-url }}" >> $GITHUB_STEP_SUMMARY
+              
+              if [ "${{ steps.merge.outputs.merge-status }}" = "conflicts" ]; then
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "⚠️ **Manual conflict resolution required**" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          fi
+
+      - name: Cleanup on failure
+        if: failure() && steps.create-branch.outputs.branch-name
+        run: |
+          # Delete the branch if something went wrong after creation
+          git push origin --delete ${{ steps.create-branch.outputs.branch-name }} || true
