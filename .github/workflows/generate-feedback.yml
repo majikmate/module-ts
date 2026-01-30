@@ -116,6 +116,7 @@ jobs:
             while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
               if copilot \
                 --agent=Feedback \
+                --model claude-sonnet-4.5 \
                 --prompt "$PROMPT" \
                 --allow-all-tools \
                 --allow-all-paths; then
