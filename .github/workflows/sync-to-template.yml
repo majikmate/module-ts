@@ -127,11 +127,11 @@ jobs:
               }
             }
 
-      - name: Checkout this repo (B/C)
+      - name: Checkout this repo
         if: steps.validate.outputs.should-sync == 'true'
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Full history needed to compare with template
           persist-credentials: false
 
       - name: Configure Git identity
