@@ -1,10 +1,8 @@
-name: Generate Assignment Feedback
+name: Generate Missing Feedback
 
-# Trigger on push to any branch to detect assignment updates
 on:
-  push:
-    paths:
-      - '20-assignments/**/workspace/**'
+  schedule:
+    - cron: '0 4 * * *'  
   workflow_dispatch:
 
 permissions:
@@ -13,56 +11,93 @@ permissions:
 
 jobs:
   detect-and-generate-feedback:
-    name: Generate Feedback for Updated Assignments
+    name: Generate Missing Feedback for Assignments
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history to detect changes
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Detect changed assignments
+      - name: Detect assignments with implementation but missing feedback
         id: detect
         run: |
-          # For push events, compare with previous commit
-          if [ -z "${{ github.event.before }}" ] || [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
-            # First commit on branch or workflow_dispatch
-            if git rev-parse HEAD^ >/dev/null 2>&1; then
-              BASE_REF="HEAD^"
-            else
-              BASE_REF="${{ github.sha }}"
+          ASSIGNMENTS=()
+          CHANGES=false
+
+          has_ts_implementation() {
+            local file="$1"
+            if [ ! -f "$file" ]; then
+              return 1
             fi
+
+            awk '
+              BEGIN { inblock=0 }
+              {
+                line=$0
+                while (length(line) > 0) {
+                  if (inblock) {
+                    end=index(line, "*/")
+                    if (end) {
+                      line=substr(line, end+2)
+                      inblock=0
+                    } else {
+                      line=""
+                    }
+                  } else {
+                    start=index(line, "/*")
+                    if (start) {
+                      pre=substr(line, 1, start-1)
+                      line=pre " " substr(line, start)
+                      inblock=1
+                    }
+                    line=line
+                    break
+                  }
+                }
+                if (!inblock) {
+                  sub(/\/\/.*$/, "", line)
+                  gsub(/[[:space:]]+/, "", line)
+                  if (length(line) > 0) { found=1; exit }
+                }
+              }
+              END { if (found) exit 0; else exit 1 }
+            ' "$file"
+          }
+
+          while IFS= read -r -d '' README_PATH; do
+            ASSIGNMENT_PATH=$(dirname "$README_PATH")
+            ASSIGNMENT_NAME="${ASSIGNMENT_PATH#20-assignments/}"
+            WORKSPACE_PATH="$ASSIGNMENT_PATH/workspace"
+            MAIN_PATH="$WORKSPACE_PATH/main.ts"
+            FEEDBACK_PATH="$ASSIGNMENT_PATH/FEEDBACK.md"
+
+            if [ -d "$WORKSPACE_PATH" ] && has_ts_implementation "$MAIN_PATH" ] && [ ! -f "$FEEDBACK_PATH" ]; then
+              ASSIGNMENTS+=("$ASSIGNMENT_NAME")
+            fi
+          done < <(find 20-assignments -type f -name README.md -print0 | sort -z -u)
+
+          ASSIGNMENTS="${ASSIGNMENTS[*]}"
+
+          if [ -n "$ASSIGNMENTS" ]; then
+            echo "Assignments with missing feedback: $ASSIGNMENTS"
+            CHANGES=true
           else
-            BASE_REF="${{ github.event.before }}"
+            echo "No assignments with missing feedback"
           fi
-          HEAD_REF="${{ github.sha }}"
-          
-          echo "Comparing $BASE_REF...$HEAD_REF"
-          
-          # Get changed files in assignments workspace folders
-          CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF | grep '^20-assignments/.*/workspace/' || true)
-          
-          if [ -z "$CHANGED_FILES" ]; then
-            echo "No assignment changes detected"
-            echo "assignments=" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Extract unique assignment folders (everything between 20-assignments/ and /workspace/)
-          ASSIGNMENTS=$(echo "$CHANGED_FILES" | sed 's|20-assignments/\(.*\)/workspace/.*|\1|' | sort -u | tr '\n' ' ')
-          
-          echo "Changed assignments: $ASSIGNMENTS"
+
           echo "assignments=$ASSIGNMENTS" >> $GITHUB_OUTPUT
+          echo "changes=$CHANGES" >> $GITHUB_OUTPUT
 
       - name: Configure Git
-        if: steps.detect.outputs.assignments != ''
+        if: steps.detect.outputs.changes == 'true'
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Generate feedback for all assignments
+      - name: Generate missing feedback for assignments
         if: steps.detect.outputs.assignments != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -70,29 +105,27 @@ jobs:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           ASSIGNMENTS: ${{ steps.detect.outputs.assignments }}
         run: |
-          # Install GitHub Copilot CLI if not available
           command -v copilot >/dev/null 2>&1 || curl -fsSL https://gh.io/copilot-install | sudo bash
 
           # Configure git with autostash and ignore rebase warnings
           git config pull.rebase true
           git config rebase.autoStash true
           git config advice.skippedCherryPicks false
-          
+
           for ASSIGNMENT in $ASSIGNMENTS; do
             if [ -z "$ASSIGNMENT" ]; then
               continue
             fi
-            
+
             ASSIGNMENT_PATH="20-assignments/$ASSIGNMENT"
             README_PATH="$ASSIGNMENT_PATH/README.md"
             WORKSPACE_PATH="$ASSIGNMENT_PATH/workspace"
-            FEEDBACK_PATH="$ASSIGNMENT_PATH/FEEDBACK.md"
-            
+
             if [ ! -f "$README_PATH" ]; then
               echo "⚠️ README not found for $ASSIGNMENT, skipping..."
               continue
             fi
-            
+
             if [ ! -d "$WORKSPACE_PATH" ]; then
               echo "⚠️ Workspace not found for $ASSIGNMENT, skipping..."
               continue
@@ -101,9 +134,9 @@ jobs:
             # Pull before processing each assignment
             echo "🔄 Pulling latest changes before processing $ASSIGNMENT..."
             git pull origin main || echo "Pull completed with warnings (ignored)"
-            
-            echo "📝 Generating feedback for: $ASSIGNMENT"
-            
+
+            echo "📝 Generating missing feedback for: $ASSIGNMENT"
+
             PROMPT_FILE=".github/prompts/GetFeedback.prompt.md"
             PROMPT_CONTENT="$(cat "$PROMPT_FILE")"
             PROMPT="$(printf '%s\n\nAssignment path: %s\nUse the Feedback agent and update FEEDBACK.md in that assignment folder.' "$PROMPT_CONTENT" "$ASSIGNMENT_PATH")"
@@ -186,15 +219,13 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "### Feedback Generation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "### Missing Feedback Generation Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           ASSIGNMENTS="${{ steps.detect.outputs.assignments }}"
-          
-          if [ -z "$ASSIGNMENTS" ]; then
-            echo "✅ No assignment changes detected" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "📝 Assignments requiring feedback:" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "$ASSIGNMENTS" ]; then
+            echo "📝 Assignments with missing feedback processed:" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             for ASSIGNMENT in $ASSIGNMENTS; do
               if [ -n "$ASSIGNMENT" ]; then
@@ -202,5 +233,7 @@ jobs:
               fi
             done
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Feedback files were generated via GitHub Copilot CLI." >> $GITHUB_STEP_SUMMARY
+            echo "Missing feedback files were generated via GitHub Copilot CLI." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ No assignments with missing feedback found" >> $GITHUB_STEP_SUMMARY
           fi
