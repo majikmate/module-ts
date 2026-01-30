@@ -238,8 +238,16 @@ jobs:
 
       - name: Push sync branch
         if: steps.check-changes.outputs.behind != '0'
+        env:
+          GIT_ASKPASS: echo
+          GIT_USERNAME: x-access-token
+          GIT_PASSWORD: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
         run: |
+          # Configure git to use credentials from environment without prompting
+          git config --local credential.helper '!f() { echo "username=${GIT_USERNAME}"; echo "password=${GIT_PASSWORD}"; }; f'
           git push origin ${{ steps.create-branch.outputs.branch-name }}
+          # Clear credential helper immediately
+          git config --local --unset credential.helper
 
       - name: Merge branch directly (no PR needed)
         if: steps.check-changes.outputs.behind != '0' && steps.check-changes.outputs.has-changes == 'false'

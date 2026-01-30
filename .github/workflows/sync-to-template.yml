@@ -180,7 +180,7 @@ jobs:
           fi
 
       - name: Create sync branch locally
-        if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
+        if: steps.ahead.outputs.ahead != '0'
         id: create-branch
         run: |
           # Use random identifier instead of predictable timestamp
@@ -190,7 +190,7 @@ jobs:
           git checkout -b "$BRANCH_NAME"
 
       - name: Push sync branch to template repo (A)
-        if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
+        if: steps.ahead.outputs.ahead != '0'
         env:
           GIT_ASKPASS: echo
           GIT_USERNAME: x-access-token
