@@ -23,6 +23,38 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            // Check if this push was triggered by our own sync workflows (prevent infinite loop)
+            if (context.eventName === 'push') {
+              try {
+                const { data: commit } = await github.rest.repos.getCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: context.sha
+                });
+                
+                const author = commit.commit.author.name;
+                const message = commit.commit.message;
+                
+                // Check if this commit was made by our sync workflows
+                const isSyncCommit = (
+                  author === 'github-actions[bot]' &&
+                  (
+                    message.includes('Sync commit history from template') ||
+                    message.includes('Merge updates from template repository') ||
+                    message.includes('Sync changes from')
+                  )
+                );
+                
+                if (isSyncCommit) {
+                  core.info('⏭️ This push was triggered by a sync workflow. Skipping to prevent infinite loop.');
+                  core.setOutput('should-sync', 'false');
+                  return;
+                }
+              } catch (error) {
+                core.warning(`Could not check commit origin: ${error.message}`);
+              }
+            }
+            
             const { data: repo } = await github.rest.repos.get({
               owner: context.repo.owner,
               repo: context.repo.repo
@@ -164,11 +196,19 @@ jobs:
           TEMPLATE_BRANCH="${{ steps.template-branch.outputs.default-branch }}"
           AHEAD=$(git rev-list --count "refs/remotes/template/${TEMPLATE_BRANCH}"..HEAD)
           echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
+          echo "Commits ahead of template/${TEMPLATE_BRANCH}: $AHEAD"
           
+          # Check for actual content differences (not just commit differences)
           if [ "$AHEAD" -gt 0 ]; then
-            echo "✅ $AHEAD commit(s) ahead of template/${TEMPLATE_BRANCH}"
+            if git diff --quiet "refs/remotes/template/${TEMPLATE_BRANCH}" HEAD; then
+              echo "has-changes=false" >> "$GITHUB_OUTPUT"
+              echo "⏭️ No content differences detected - commits are identical to template"
+            else
+              echo "has-changes=true" >> "$GITHUB_OUTPUT"
+              echo "✅ Content differences detected - sync needed"
+            fi
           else
-            echo "✅ Already synchronized with template/${TEMPLATE_BRANCH}"
+            echo "has-changes=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create sync branch locally
@@ -196,8 +236,56 @@ jobs:
           # Clear credential helper immediately
           git config --local --unset credential.helper
 
+      - name: Merge branch directly (no PR needed)
+        if: steps.ahead.outputs.ahead != '0' && steps.ahead.outputs.has-changes == 'false'
+        id: direct-merge
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          script: |
+            const owner = '${{ steps.validate.outputs.template-owner }}';
+            const repo = '${{ steps.validate.outputs.template-repo }}';
+            const head = '${{ steps.create-branch.outputs.branch-name }}';
+            const base = '${{ steps.template-branch.outputs.default-branch }}';
+            
+            try {
+              // Directly merge the branch to default branch
+              const { data: merge } = await github.rest.repos.merge({
+                owner,
+                repo,
+                base: base,
+                head: head,
+                commit_message: `Sync commit history from ${context.repo.owner}/${context.repo.repo}\n\nNo content changes - syncing commit history only.`
+              });
+              
+              core.info(`✅ Directly merged ${head} into ${base}: ${merge.sha}`);
+              core.setOutput('merged', 'true');
+              core.setOutput('merge-sha', merge.sha);
+              
+              // Delete the branch after merge
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `heads/${head}`
+                });
+                core.info(`🧹 Deleted branch: ${head}`);
+              } catch (error) {
+                core.warning(`Could not delete branch: ${error.message}`);
+              }
+            } catch (error) {
+              if (error.status === 409) {
+                core.warning('Merge conflict detected - content should have been identical');
+              } else if (error.status === 404) {
+                core.setFailed(`Branch or base not found: ${error.message}`);
+              } else {
+                core.setFailed(`Failed to merge: ${error.message}`);
+              }
+              throw error;
+            }
+
       - name: Create PR in template repo
-        if: steps.ahead.outputs.ahead != '0'
+        if: steps.ahead.outputs.has-changes == 'true'
         id: create-pr
         uses: actions/github-script@v7
         with:
@@ -394,6 +482,13 @@ jobs:
           
           if [ "${{ steps.ahead.outputs.ahead }}" = "0" ]; then
             echo "✅ Repository is already synchronized with template" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.ahead.outputs.has-changes }}" = "false" ]; then
+            echo "✅ Synced commit history (${{ steps.ahead.outputs.ahead }} commit(s))" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "ℹ️ Content is identical to template - merged directly without PR" >> $GITHUB_STEP_SUMMARY
+            if [ -n "${{ steps.direct-merge.outputs.merge-sha }}" ]; then
+              echo "**Merge commit:** \`${{ steps.direct-merge.outputs.merge-sha }}\`" >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "📤 Pushed ${{ steps.ahead.outputs.ahead }} commit(s) to template" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
