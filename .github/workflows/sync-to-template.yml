@@ -23,6 +23,25 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const { data: repo } = await github.rest.repos.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            
+            // Check if this repo was created from a template
+            if (!repo.template_repository) {
+              core.info('⏭️ This repository was not created from a template. Skipping sync.');
+              core.setOutput('should-sync', 'false');
+              return;
+            }
+            
+            // Check if this repo is a fork
+            if (repo.fork) {
+              core.info('⏭️ This repository is a fork. Skipping sync to prevent duplicate syncs.');
+              core.setOutput('should-sync', 'false');
+              return;
+            }
+            
             // Check if this push was triggered by our own sync workflows (prevent infinite loop)
             if (context.eventName === 'push') {
               try {
@@ -52,25 +71,6 @@ jobs:
               } catch (error) {
                 core.warning(`Could not check commit origin: ${error.message}`);
               }
-            }
-            
-            const { data: repo } = await github.rest.repos.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo
-            });
-            
-            // Check if this repo is a fork
-            if (repo.fork) {
-              core.info('⏭️ This repository is a fork. Skipping sync to prevent duplicate syncs.');
-              core.setOutput('should-sync', 'false');
-              return;
-            }
-            
-            // Check if this repo was created from a template
-            if (!repo.template_repository) {
-              core.info('⏭️ This repository was not created from a template. Skipping sync.');
-              core.setOutput('should-sync', 'false');
-              return;
             }
             
             // Check if token is configured
