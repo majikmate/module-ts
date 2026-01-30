@@ -29,16 +29,16 @@ jobs:
               repo: context.repo.repo
             });
             
-            // Check if this repo was created from a template
-            if (!repo.template_repository) {
-              core.info('⏭️ This repository was not created from a template. Skipping sync.');
+            // Check if this repo is a fork
+            if (repo.fork) {
+              core.info('⏭️ This repository is a fork. Skipping sync to prevent duplicate syncs.');
               core.setOutput('should-sync', 'false');
               return;
             }
             
-            // Check if this repo is a fork
-            if (repo.fork) {
-              core.info('⏭️ This repository is a fork. Skipping sync to prevent duplicate syncs.');
+            // Check if this repo was created from a template
+            if (!repo.template_repository) {
+              core.info('⏭️ This repository was not created from a template. Skipping sync.');
               core.setOutput('should-sync', 'false');
               return;
             }
