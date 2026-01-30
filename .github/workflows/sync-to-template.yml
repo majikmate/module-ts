@@ -94,8 +94,12 @@ jobs:
 
       - name: Push sync branch to template repo (A)
         if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
+        env:
+          TEMPLATE_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          TEMPLATE_OWNER: ${{ steps.validate.outputs.template-owner }}
+          TEMPLATE_REPO: ${{ steps.validate.outputs.template-repo }}
         run: |
-          git push template HEAD:${{ steps.create-branch.outputs.branch-name }}
+          git push "https://x-access-token:${TEMPLATE_TOKEN}@github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git" HEAD:${{ steps.create-branch.outputs.branch-name }}
 
       - name: Create PR in template repo (A)
         if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
@@ -155,7 +159,7 @@ jobs:
             core.setOutput('pr-number', pr.number);
 
       - name: Auto-merge PR if no conflicts
-        if: steps.create-pr.outputs.pr-number
+        if: steps.template-check.outputs.is-template-copy == 'true' && steps.secretcheck.outputs.missing == 'false' && steps.create-pr.outputs.pr-number
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
