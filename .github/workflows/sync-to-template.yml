@@ -117,15 +117,17 @@ jobs:
       - name: Fetch template repository
         if: steps.validate.outputs.should-sync == 'true'
         env:
-          TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          GIT_ASKPASS: echo
+          GIT_USERNAME: x-access-token
+          GIT_PASSWORD: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
           TEMPLATE_OWNER: ${{ steps.validate.outputs.template-owner }}
           TEMPLATE_REPO: ${{ steps.validate.outputs.template-repo }}
         run: |
-          # Configure git to use token via extraheader (no token in URL)
-          git config --local http."https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}".extraheader "Authorization: token ${TOKEN}"
+          # Configure git to use credentials from environment without prompting
+          git config --local credential.helper '!f() { echo "username=${GIT_USERNAME}"; echo "password=${GIT_PASSWORD}"; }; f'
           git fetch "https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git" main:refs/remotes/template/main
-          # Unset the credential immediately after use
-          git config --local --unset http."https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}".extraheader
+          # Clear credential helper immediately
+          git config --local --unset credential.helper
 
       - name: Check if we are ahead of template/main
         if: steps.validate.outputs.should-sync == 'true'
@@ -164,15 +166,17 @@ jobs:
       - name: Push sync branch to template repo (A)
         if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
         env:
-          TEMPLATE_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          GIT_ASKPASS: echo
+          GIT_USERNAME: x-access-token
+          GIT_PASSWORD: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
           TEMPLATE_OWNER: ${{ steps.validate.outputs.template-owner }}
           TEMPLATE_REPO: ${{ steps.validate.outputs.template-repo }}
         run: |
-          # Configure git to use token via extraheader (GitHub Actions masks this automatically)
-          git config --local http."https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}".extraheader "Authorization: token ${TEMPLATE_TOKEN}"
+          # Configure git to use credentials from environment without prompting
+          git config --local credential.helper '!f() { echo "username=${GIT_USERNAME}"; echo "password=${GIT_PASSWORD}"; }; f'
           git push "https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git" HEAD:${{ steps.create-branch.outputs.branch-name }}
-          # Unset the credential to avoid leaking in subsequent steps
-          git config --local --unset http."https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}".extraheader
+          # Clear credential helper immediately
+          git config --local --unset credential.helper
 
       - name: Create PR in template repo (A)
         if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
