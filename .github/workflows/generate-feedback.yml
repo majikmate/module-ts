@@ -3,6 +3,9 @@ name: Generate Assignment Feedback
 # Trigger on push to any branch to detect assignment updates
 on:
   push:
+    branches-ignore:
+      - 'sync-from-template-*'
+      - 'sync-from-*'
     paths:
       - '20-assignments/**/workspace/**'
   workflow_dispatch:
