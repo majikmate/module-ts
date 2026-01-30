@@ -1,4 +1,4 @@
-name: Sync changes to template via PR automerge
+name: Sync changes to template
 
 on:
   push:
@@ -46,18 +46,66 @@ jobs:
             
             // Extract template owner and repo
             const templateFullName = repo.template_repository.full_name;
-            const [templateOwner, templateRepo] = templateFullName.split('/');
+            const parts = templateFullName.split('/');
+            
+            // Validate template repository format
+            if (parts.length !== 2 || !parts[0] || !parts[1]) {
+              core.setFailed(`Invalid template repository format: ${templateFullName}`);
+              core.setOutput('should-sync', 'false');
+              return;
+            }
+            
+            const [templateOwner, templateRepo] = parts;
+            
+            // Validate GitHub naming rules (alphanumeric, hyphens, underscores, dots)
+            if (!/^[a-zA-Z0-9._-]+$/.test(templateOwner) || !/^[a-zA-Z0-9._-]+$/.test(templateRepo)) {
+              core.setFailed('Invalid characters in template repository name');
+              core.setOutput('should-sync', 'false');
+              return;
+            }
             
             core.info(`✅ This repository was created from template: ${templateFullName}`);
             core.setOutput('should-sync', 'true');
             core.setOutput('template-owner', templateOwner);
             core.setOutput('template-repo', templateRepo);
 
+      - name: Validate token permissions
+        if: steps.validate.outputs.should-sync == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          script: |
+            try {
+              // Verify token can access template repo
+              const { data: repo } = await github.rest.repos.get({
+                owner: '${{ steps.validate.outputs.template-owner }}',
+                repo: '${{ steps.validate.outputs.template-repo }}'
+              });
+              
+              core.info(`✅ Token has access to template repository: ${repo.full_name}`);
+              
+              // Check token identity and permissions
+              const { data: user } = await github.rest.users.getAuthenticated();
+              core.info(`✅ Token belongs to: ${user.login} (type: ${user.type})`);
+              
+              if (user.site_admin) {
+                core.warning('⚠️ Token has site admin privileges - consider using a less privileged token');
+              }
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed(`Token cannot access template repository. Check token permissions and repository existence.`);
+              } else if (error.status === 401) {
+                core.setFailed(`Token authentication failed. Check if TEMPLATE_SYNC_TOKEN is valid.`);
+              } else {
+                core.setFailed(`Token validation failed: ${error.message}`);
+              }
+            }
+
       - name: Checkout this repo (B/C)
         if: steps.validate.outputs.should-sync == 'true'
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 100
           persist-credentials: false
 
       - name: Configure Git identity
@@ -66,30 +114,50 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Add template remote (A) and fetch
+      - name: Fetch template repository
         if: steps.validate.outputs.should-sync == 'true'
         env:
           TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
           TEMPLATE_OWNER: ${{ steps.validate.outputs.template-owner }}
           TEMPLATE_REPO: ${{ steps.validate.outputs.template-repo }}
         run: |
-          git remote add template "https://x-access-token:${TOKEN}@github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git"
-          git fetch template --prune
+          # Configure git to use token via extraheader (no token in URL)
+          git config --local http."https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}".extraheader "Authorization: token ${TOKEN}"
+          git fetch "https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git" main:refs/remotes/template/main
+          # Unset the credential immediately after use
+          git config --local --unset http."https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}".extraheader
 
       - name: Check if we are ahead of template/main
         if: steps.validate.outputs.should-sync == 'true'
         id: ahead
         run: |
           # How many commits exist on our main that are not in template/main?
-          AHEAD=$(git rev-list --count template/main..HEAD)
+          AHEAD=$(git rev-list --count refs/remotes/template/main..HEAD)
           echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
           echo "Commits ahead of template/main: $AHEAD"
+
+      - name: Validate commit count
+        if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
+        run: |
+          AHEAD=${{ steps.ahead.outputs.ahead }}
+          MAX_COMMITS=50
+          
+          if [ "$AHEAD" -gt "$MAX_COMMITS" ]; then
+            echo "::error::Too many commits to sync ($AHEAD). Maximum allowed is $MAX_COMMITS."
+            echo "::error::Consider syncing in smaller batches or performing a manual sync."
+            echo "::error::This limit prevents resource exhaustion and timeout issues."
+            exit 1
+          fi
+          
+          echo "✅ Commit count ($AHEAD) is within acceptable limits (max: $MAX_COMMITS)"
 
       - name: Create sync branch locally
         if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
         id: create-branch
         run: |
-          BRANCH_NAME="sync-from-${{ github.repository_owner }}-${{ github.event.repository.name }}-$(date +%Y%m%d-%H%M%S)"
+          # Use random identifier instead of predictable timestamp
+          RANDOM_ID=$(openssl rand -hex 8)
+          BRANCH_NAME="sync-from-${{ github.repository_owner }}-${RANDOM_ID}"
           echo "branch-name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           git checkout -b "$BRANCH_NAME"
 
@@ -100,7 +168,11 @@ jobs:
           TEMPLATE_OWNER: ${{ steps.validate.outputs.template-owner }}
           TEMPLATE_REPO: ${{ steps.validate.outputs.template-repo }}
         run: |
-          git push "https://x-access-token:${TEMPLATE_TOKEN}@github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git" HEAD:${{ steps.create-branch.outputs.branch-name }}
+          # Configure git to use token via extraheader (GitHub Actions masks this automatically)
+          git config --local http."https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}".extraheader "Authorization: token ${TEMPLATE_TOKEN}"
+          git push "https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git" HEAD:${{ steps.create-branch.outputs.branch-name }}
+          # Unset the credential to avoid leaking in subsequent steps
+          git config --local --unset http."https://github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}".extraheader
 
       - name: Create PR in template repo (A)
         if: steps.validate.outputs.should-sync == 'true' && steps.ahead.outputs.ahead != '0'
@@ -109,55 +181,103 @@ jobs:
         with:
           github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
           script: |
+            // Sanitize user-controlled inputs to prevent injection
+            const sanitize = (str) => {
+              if (!str) return '';
+              // Escape template literal special characters and limit length
+              return String(str)
+                .slice(0, 200) // Prevent extremely long inputs
+                .replace(/[`${}\\]/g, '\\$&') // Escape backticks, dollars, braces, backslashes
+                .replace(/\n/g, ' ') // Remove newlines
+                .trim();
+            };
+            
             const owner = '${{ steps.validate.outputs.template-owner }}';
             const repo  = '${{ steps.validate.outputs.template-repo }}';
-            const head  = '${{ steps.create-branch.outputs.branch-name }}'; // branch exists in A (we pushed it there)
-            const base  = 'main';
+            const head  = '${{ steps.create-branch.outputs.branch-name }}';
+            
+            // Query actual default branch instead of hardcoding 'main'
+            let base;
+            try {
+              const { data: templateRepo } = await github.rest.repos.get({ owner, repo });
+              base = templateRepo.default_branch;
+              core.info(`Using default branch: ${base}`);
+            } catch (error) {
+              core.warning(`Could not query default branch, using 'main': ${error.message}`);
+              base = 'main';
+            }
+            
+            // Sanitize all user-controlled inputs
+            const sourceOwner = sanitize(context.repo.owner);
+            const sourceRepo = sanitize(context.repo.repo);
+            const sourceRef = sanitize(context.ref.replace('refs/heads/', ''));
+            const sourceSha = sanitize(context.sha);
+            const triggerActor = sanitize(context.actor);
 
             // If PR already exists for this branch, update it
-            const prs = await github.rest.pulls.list({
-              owner, repo, state: 'open', head: `${owner}:${head}`, base
-            });
+            try {
+              const prs = await github.rest.pulls.list({
+                owner, repo, state: 'open', head: `${owner}:${head}`, base
+              });
 
-            if (prs.data.length > 0) {
-              const existingPR = prs.data[0];
-              core.info(`PR already exists: ${existingPR.html_url}`);
-              
-              // Force update the branch with latest commits
-              try {
-                await github.rest.git.updateRef({
-                  owner, repo,
-                  ref: `heads/${head}`,
-                  sha: context.sha,
-                  force: true
-                });
-                core.info('✅ Updated existing PR branch with latest commits');
-              } catch (error) {
-                core.warning(`Could not update branch: ${error.message}`);
+              if (prs.data.length > 0) {
+                const existingPR = prs.data[0];
+                core.info(`PR already exists: ${existingPR.html_url}`);
+                
+                // Force update the branch with latest commits
+                try {
+                  await github.rest.git.updateRef({
+                    owner, repo,
+                    ref: `heads/${head}`,
+                    sha: context.sha,
+                    force: true
+                  });
+                  core.info('✅ Updated existing PR branch with latest commits');
+                } catch (error) {
+                  core.warning(`Could not update branch: ${error.message}`);
+                }
+                
+                core.setOutput('pr-number', existingPR.number);
+                return;
               }
-              
-              core.setOutput('pr-number', existingPR.number);
-              return;
+            } catch (error) {
+              core.warning(`Error checking for existing PRs: ${error.message}`);
             }
 
-            const { data: pr } = await github.rest.pulls.create({
-              owner,
-              repo,
-              title: `Sync changes from ${context.repo.owner}/${context.repo.repo}`,
-              head,
-              base,
-              body: [
-                `## Automatic Sync from Copy Repository`,
-                ``,
-                `- Source: \`${context.repo.owner}/${context.repo.repo}\``,
-                `- Source branch: \`${context.ref.replace('refs/heads/', '')}\``,
-                `- Commit: \`${context.sha}\``,
-                `- Triggered by: @${context.actor}`,
-              ].join('\n')
-            });
+            // Create new PR with comprehensive error handling
+            try {
+              const { data: pr } = await github.rest.pulls.create({
+                owner,
+                repo,
+                title: `Sync changes from ${sourceOwner}/${sourceRepo}`,
+                head,
+                base,
+                body: [
+                  `## Automatic Sync from Copy Repository`,
+                  ``,
+                  `- Source: \`${sourceOwner}/${sourceRepo}\``,
+                  `- Source branch: \`${sourceRef}\``,
+                  `- Commit: \`${sourceSha}\``,
+                  `- Triggered by: @${triggerActor}`,
+                ].join('\n')
+              });
 
-            core.info(`Created PR #${pr.number}: ${pr.html_url}`);
-            core.setOutput('pr-number', pr.number);
+              core.info(`✅ Created PR #${pr.number}: ${pr.html_url}`);
+              core.setOutput('pr-number', pr.number);
+            } catch (error) {
+              if (error.status === 422) {
+                core.setFailed(`Failed to create PR: Validation failed. ${error.message}`);
+                core.error('Check that branch names are valid and base branch exists.');
+              } else if (error.status === 403) {
+                core.setFailed(`Failed to create PR: Insufficient permissions. ${error.message}`);
+                core.error('Token needs pull request write access to the template repository.');
+              } else if (error.status === 404) {
+                core.setFailed(`Failed to create PR: Repository not found. ${error.message}`);
+              } else {
+                core.setFailed(`Failed to create PR: ${error.message}`);
+              }
+              throw error;
+            }
 
       - name: Auto-merge PR if no conflicts
         if: steps.validate.outputs.should-sync == 'true' && steps.create-pr.outputs.pr-number
