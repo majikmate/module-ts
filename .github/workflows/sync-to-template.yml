@@ -1,65 +1,269 @@
-name: Sync to Template Repository
+name: Sync changes to template (open PR in A)
 
 on:
   push:
-    branches:
-      - main
-
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: sync-to-template-${{ github.repository }}
+  cancel-in-progress: false
 jobs:
   sync-to-template:
-    # Only run if this is NOT the template repo itself
-    if: github.repository != 'majikmate/module-ts'
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Checkout Copy Repository
+      - name: Check if this repo is a template copy
+        id: template-check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: repo } = await github.rest.repos.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            
+            // Check if this repo was created from a template
+            if (!repo.template_repository) {
+              core.info('This repository was not created from a template. Skipping sync.');
+              core.setOutput('is-template-copy', 'false');
+              return;
+            }
+            
+            // Extract template owner and repo
+            const templateFullName = repo.template_repository.full_name;
+            const [templateOwner, templateRepo] = templateFullName.split('/');
+            
+            core.info(`✅ This repository was created from template: ${templateFullName}`);
+            core.setOutput('is-template-copy', 'true');
+            core.setOutput('template-owner', templateOwner);
+            core.setOutput('template-repo', templateRepo);
+
+      - name: Skip if not a template copy
+        if: steps.template-check.outputs.is-template-copy != 'true'
+        run: |
+          echo "This workflow only runs in repositories created from a template."
+          exit 0
+      - name: Check if token secret exists
+        if: steps.template-check.outputs.is-template-copy == 'true'
+        id: secretcheck
+        run: |
+          if [ -z "${{ secrets.TEMPLATE_SYNC_TOKEN }}" ]; then
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "missing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip (no token configured in this repo)
+        if: steps.template-check.outputs.is-template-copy == 'true' && steps.secretcheck.outputs.missing == 'true'
+        run: |
+          echo "TEMPLATE_SYNC_TOKEN is not set in this repository. Skipping sync."
+          exit 0
+
+      - name: Checkout this repo (B/C)
+        if: steps.template-check.outputs.is-template-copy == 'true' && steps.secretcheck.outputs.missing == 'false'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
-      
-      - name: Configure Git
+
+      - name: Configure Git identity
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-      
-      - name: Add Template Repository as Remote
+
+      - name: Add template remote (A) and fetch
+        env:
+          TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          TEMPLATE_OWNER: ${{ steps.template-check.outputs.template-owner }}
+          TEMPLATE_REPO: ${{ steps.template-check.outputs.template-repo }}
         run: |
-          git remote add template https://x-access-token:${{ secrets.TEMPLATE_SYNC_TOKEN }}@github.com/majikmate/module-ts.git
-          git fetch template
-      
-      - name: Create Branch for PR
+          git remote add template "https://x-access-token:${TOKEN}@github.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}.git"
+          git fetch template --prune
+
+      - name: Check if we are ahead of template/main
+        id: ahead
         run: |
-          BRANCH_NAME="sync-from-${{ github.repository_owner }}-$(date +%Y%m%d-%H%M%S)"
+          # How many commits exist on our main that are not in template/main?
+          AHEAD=$(git rev-list --count template/main..HEAD)
+          echo "ahead=$AHEAD" >> "$GITHUB_OUTPUT"
+          echo "Commits ahead of template/main: $AHEAD"
+
+      - name: Stop if nothing to sync
+        if: steps.ahead.outputs.ahead == '0'
+        run: |
+          echo "No new commits compared to template/main. Nothing to sync."
+          exit 0
+
+      - name: Create sync branch locally
+        run: |
+          BRANCH_NAME="sync-from-${{ github.repository_owner }}-${{ github.event.repository.name }}-$(date +%Y%m%d-%H%M%S)"
           echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
-          git checkout -b $BRANCH_NAME
-      
-      - name: Push to Template Repository
+          git checkout -b "$BRANCH_NAME"
+
+      - name: Push sync branch to template repo (A)
         run: |
-          git push template ${{ env.BRANCH_NAME }}
-      
-      - name: Create Pull Request
+          git push template HEAD:${{ env.BRANCH_NAME }}
+
+      - name: Create PR in template repo (A)
+        id: create-pr
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
           script: |
-            const { data: pr } = await github.rest.pulls.create({
-              owner: 'majikmate',
-              repo: 'module-ts',
-              title: `Sync changes from ${context.repo.owner}/${context.repo.repo}`,
-              head: process.env.BRANCH_NAME,
-              base: 'main',
-              body: `## Automatic Sync from Copy Repository
-              
-              This PR contains changes from the copy repository: **${context.repo.owner}/${context.repo.repo}**
-              
-              ### Details
-              - Source Repository: \`${context.repo.owner}/${context.repo.repo}\`
-              - Source Branch: \`${context.ref.replace('refs/heads/', '')}\`
-              - Commit: ${context.sha}
-              - Triggered by: @${context.actor}
-              
-              Please review these changes before merging into the template repository.`
+            const owner = '${{ steps.template-check.outputs.template-owner }}';
+            const repo  = '${{ steps.template-check.outputs.template-repo }}';
+            const head  = process.env.BRANCH_NAME; // branch exists in A (we pushed it there)
+            const base  = 'main';
+
+            // If PR already exists for this branch, update it
+            const prs = await github.rest.pulls.list({
+              owner, repo, state: 'open', head: `${owner}:${head}`, base
             });
+
+            if (prs.data.length > 0) {
+              const existingPR = prs.data[0];
+              core.info(`PR already exists: ${existingPR.html_url}`);
+              
+              // Force update the branch with latest commits
+              try {
+                await github.rest.git.updateRef({
+                  owner, repo,
+                  ref: `heads/${head}`,
+                  sha: context.sha,
+                  force: true
+                });
+                core.info('✅ Updated existing PR branch with latest commits');
+              } catch (error) {
+                core.warning(`Could not update branch: ${error.message}`);
+              }
+              
+              core.setOutput('pr-number', existingPR.number);
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.create({
+              owner,
+              repo,
+              title: `Sync changes from ${context.repo.owner}/${context.repo.repo}`,
+              head,
+              base,
+              body: [
+                `## Automatic Sync from Copy Repository`,
+                ``,
+                `- Source: \`${context.repo.owner}/${context.repo.repo}\``,
+                `- Source branch: \`${context.ref.replace('refs/heads/', '')}\``,
+                `- Commit: \`${context.sha}\``,
+                `- Triggered by: @${context.actor}`,
+              ].join('\n')
+            });
+
+            core.info(`Created PR #${pr.number}: ${pr.html_url}`);
+            core.setOutput('pr-number', pr.number);
+
+      - name: Auto-merge PR if no conflicts
+        if: steps.create-pr.outputs.pr-number
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          script: |
+            const owner = '${{ steps.template-check.outputs.template-owner }}';
+            const repo  = '${{ steps.template-check.outputs.template-repo }}';
+            const pull_number = ${{ steps.create-pr.outputs.pr-number }};
+
+            // Poll for mergeable state with retries (GitHub needs time to compute)
+            let attempts = 0;
+            let prData;
             
-            console.log(`Created PR #${pr.number}: ${pr.html_url}`);
+            core.info('⏳ Waiting for GitHub to compute mergeable state...');
+            
+            while (attempts < 10) {
+              prData = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+              
+              core.info(`Attempt ${attempts + 1}/10: mergeable=${prData.mergeable}, state=${prData.mergeable_state}`);
+              
+              // If state is determined (not null or unknown), exit loop
+              if (prData.mergeable !== null && prData.mergeable_state !== 'unknown') {
+                break;
+              }
+              
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              attempts++;
+            }
+            
+            // Handle different mergeable states
+            if (prData.mergeable_state === 'clean') {
+              core.info('✅ PR is clean and ready to merge. Auto-merging...');
+              
+              try {
+                await github.rest.pulls.merge({
+                  owner, repo, pull_number,
+                  merge_method: 'merge',
+                  commit_title: `Auto-merge: ${prData.title}`,
+                  commit_message: 'Automatically merged - no conflicts detected.'
+                });
+                
+                core.info(`✅ Successfully merged PR #${pull_number}`);
+                
+                // Add success comment
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: pull_number,
+                  body: '🤖 **Auto-merged successfully!**\n\nNo conflicts detected. Changes have been merged into the template repository.'
+                });
+                
+                // Delete the sync branch after successful merge
+                try {
+                  await github.rest.git.deleteRef({
+                    owner, repo,
+                    ref: `heads/${process.env.BRANCH_NAME}`
+                  });
+                  core.info(`🧹 Deleted branch: ${process.env.BRANCH_NAME}`);
+                } catch (error) {
+                  core.warning(`Could not delete branch: ${error.message}`);
+                }
+              } catch (error) {
+                core.setFailed(`Failed to merge PR: ${error.message}`);
+              }
+            } else if (prData.mergeable_state === 'dirty') {
+              core.warning('⚠️ PR has merge conflicts. Manual resolution required.');
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pull_number,
+                body: '⚠️ **Manual review required**\n\nThis PR has merge conflicts and cannot be auto-merged. Please review and resolve conflicts manually.'
+              });
+            } else if (prData.mergeable_state === 'blocked') {
+              core.warning('⚠️ PR is blocked by branch protection rules (required checks, reviewers, etc.).');
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pull_number,
+                body: '⚠️ **Blocked by branch protection**\n\nThis PR cannot be auto-merged due to branch protection rules. Required status checks or reviews may be needed.'
+              });
+            } else if (prData.mergeable_state === 'behind') {
+              core.warning('⚠️ PR is behind the base branch. Update required.');
+            } else if (prData.mergeable_state === 'unstable') {
+              core.warning('⚠️ PR has failing status checks. Review required.');
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pull_number,
+                body: '⚠️ **Status checks failing**\n\nThis PR has failing status checks and cannot be auto-merged. Please review the failed checks.'
+              });
+            } else {
+              core.warning(`⚠️ Unexpected mergeable state: ${prData.mergeable_state}. Manual review recommended.`);
+            }
+
+      - name: Cleanup on failure
+        if: failure() && env.BRANCH_NAME
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN }}
+          script: |
+            const owner = '${{ steps.template-check.outputs.template-owner }}';
+            const repo  = '${{ steps.template-check.outputs.template-repo }}';
+            
+            if (process.env.BRANCH_NAME) {
+              try {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `heads/${process.env.BRANCH_NAME}`
+                });
+                core.info(`🧹 Cleaned up failed branch: ${process.env.BRANCH_NAME}`);
+              } catch (error) {
+                core.info('No cleanup needed or branch already deleted');
+              }
+            }
