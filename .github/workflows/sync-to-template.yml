@@ -22,10 +22,19 @@ jobs:
               repo: context.repo.repo
             });
             
+            // Check if this repo is a fork
+            if (repo.fork) {
+              core.info('This repository is a fork. Skipping sync to prevent duplicate syncs.');
+              core.setOutput('is-template-copy', 'false');
+              core.setOutput('is-fork', 'true');
+              return;
+            }
+            
             // Check if this repo was created from a template
             if (!repo.template_repository) {
               core.info('This repository was not created from a template. Skipping sync.');
               core.setOutput('is-template-copy', 'false');
+              core.setOutput('is-fork', 'false');
               return;
             }
             
@@ -35,13 +44,18 @@ jobs:
             
             core.info(`✅ This repository was created from template: ${templateFullName}`);
             core.setOutput('is-template-copy', 'true');
+            core.setOutput('is-fork', 'false');
             core.setOutput('template-owner', templateOwner);
             core.setOutput('template-repo', templateRepo);
 
       - name: Skip if not a template copy
         if: steps.template-check.outputs.is-template-copy != 'true'
         run: |
-          echo "This workflow only runs in repositories created from a template."
+          if [ "${{ steps.template-check.outputs.is-fork }}" == "true" ]; then
+            echo "This repository is a fork. Workflow skipped to prevent duplicate syncs."
+          else
+            echo "This workflow only runs in repositories created from a template."
+          fi
           exit 0
       - name: Check if token secret exists
         if: steps.template-check.outputs.is-template-copy == 'true'
