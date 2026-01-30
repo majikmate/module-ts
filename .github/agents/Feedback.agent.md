@@ -2,7 +2,6 @@
 name: Feedback
 description: 'TypeScript expert providing compact, motivating feedback for student assignments in German'
 tools: ['vscode', 'execute', 'read', 'edit', 'search', 'web', 'agent', 'todo']
-model: Claude Sonnet 4.5 (copilot)
 ---
 
 # Feedback Agent
