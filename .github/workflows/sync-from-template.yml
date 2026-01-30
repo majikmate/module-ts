@@ -262,6 +262,93 @@ jobs:
               }
             }
 
+      - name: Auto-merge PR if no conflicts
+        if: steps.validate.outputs.should-sync == 'true' && steps.create-pr.outputs.pr-number && steps.merge.outputs.merge-status == 'success'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TEMPLATE_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = ${{ steps.create-pr.outputs.pr-number }};
+
+            // Poll for mergeable state with retries (GitHub needs time to compute)
+            let attempts = 0;
+            let prData;
+            
+            core.info('⏳ Waiting for GitHub to compute mergeable state...');
+            
+            while (attempts < 10) {
+              prData = (await github.rest.pulls.get({ owner, repo, pull_number })).data;
+              
+              core.info(`Attempt ${attempts + 1}/10: mergeable=${prData.mergeable}, state=${prData.mergeable_state}`);
+              
+              // If state is determined (not null or unknown), exit loop
+              if (prData.mergeable !== null && prData.mergeable_state !== 'unknown') {
+                break;
+              }
+              
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              attempts++;
+            }
+            
+            // Handle different mergeable states
+            if (prData.mergeable_state === 'clean') {
+              core.info('✅ PR is clean and ready to merge. Auto-merging...');
+              
+              try {
+                await github.rest.pulls.merge({
+                  owner, repo, pull_number,
+                  merge_method: 'merge',
+                  commit_title: `Auto-merge: ${prData.title}`,
+                  commit_message: 'Automatically merged - no conflicts detected.'
+                });
+                
+                core.info(`✅ Successfully merged PR #${pull_number}`);
+                
+                // Add success comment
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: pull_number,
+                  body: '🤖 **Auto-merged successfully!**\n\nNo conflicts detected. Template changes have been merged.'
+                });
+                
+                // Delete the sync branch after successful merge
+                try {
+                  await github.rest.git.deleteRef({
+                    owner, repo,
+                    ref: `heads/${{ steps.create-branch.outputs.branch-name }}`
+                  });
+                  core.info(`🧹 Deleted branch: ${{ steps.create-branch.outputs.branch-name }}`);
+                } catch (error) {
+                  core.warning(`Could not delete branch: ${error.message}`);
+                }
+              } catch (error) {
+                core.setFailed(`Failed to merge PR: ${error.message}`);
+              }
+            } else if (prData.mergeable_state === 'dirty') {
+              core.warning('⚠️ PR has merge conflicts. Manual resolution required.');
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pull_number,
+                body: '⚠️ **Manual review required**\n\nThis PR has merge conflicts and cannot be auto-merged. Please review and resolve conflicts manually.'
+              });
+            } else if (prData.mergeable_state === 'blocked') {
+              core.warning('⚠️ PR is blocked by branch protection rules (required checks, reviewers, etc.).');
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pull_number,
+                body: '⚠️ **Blocked by branch protection**\n\nThis PR cannot be auto-merged due to branch protection rules. Required status checks or reviews may be needed.'
+              });
+            } else if (prData.mergeable_state === 'behind') {
+              core.warning('⚠️ PR is behind the base branch. Update required.');
+            } else if (prData.mergeable_state === 'unstable') {
+              core.warning('⚠️ PR has failing status checks. Review required.');
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pull_number,
+                body: '⚠️ **Status checks failing**\n\nThis PR has failing status checks and cannot be auto-merged. Please review the failed checks.'
+              });
+            } else {
+              core.warning(`⚠️ Unexpected mergeable state: ${prData.mergeable_state}. Manual review recommended.`);
+            }
+
       - name: Summary
         if: steps.validate.outputs.should-sync == 'true'
         run: |
