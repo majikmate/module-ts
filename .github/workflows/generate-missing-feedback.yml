@@ -2,7 +2,7 @@ name: Generate Missing Feedback
 
 on:
   schedule:
-    - cron: '0 4 * * *'  
+    - cron: '0 4 * * *'
   workflow_dispatch:
   workflow_run:
     workflows: ["Sync changes from template"]
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     # Only run on schedule or manual trigger, OR if sync workflow succeeded
     if: |
-      github.event_name != 'workflow_run' || 
+      github.event_name != 'workflow_run' ||
       github.event.workflow_run.conclusion == 'success'
 
     steps:
