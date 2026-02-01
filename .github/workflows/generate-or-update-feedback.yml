@@ -72,7 +72,7 @@ jobs:
             MAIN_PATH="$WORKSPACE_PATH/main.ts"
             FEEDBACK_PATH="$ASSIGNMENT_PATH/FEEDBACK.md"
 
-            if [ -d "$WORKSPACE_PATH" ] && has_ts_implementation "$MAIN_PATH" ]; then
+            if [ -d "$WORKSPACE_PATH" ] && has_ts_implementation "$MAIN_PATH"; then
               ASSIGNMENTS+=("$ASSIGNMENT_NAME")
             fi
           done < <(find 20-assignments -type f -name README.md -print0 | sort -z -u)
