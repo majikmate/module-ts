@@ -29,7 +29,16 @@
 
 Die folgenden Aufgaben helfen beim Üben und Vertiefen der Lerninhalte:
 
-_Aufgaben werden noch hinzugefügt._
+- [80.01 - Begrüßungs-Funktionen](../../../20-assignments/80-functions/80.01-greeting-functions/README.md)
+- [80.02 - Taschenrechner-Funktionen](../../../20-assignments/80-functions/80.02-calculator-functions/README.md)
+- [80.03 - Temperatur-Umrechner](../../../20-assignments/80-functions/80.03-temperature-converter/README.md)
+- [80.04 - Zahlen-Validierungsfunktionen](../../../20-assignments/80-functions/80.04-number-validator/README.md)
+- [80.05 - String-Operationen](../../../20-assignments/80-functions/80.05-string-operations/README.md)
+- [80.06 - Arrow-Funktionen: Grundlagen](../../../20-assignments/80-functions/80.06-arrow-basics/README.md)
+- [80.07 - Array-Transformationen mit Arrow-Funktionen](../../../20-assignments/80-functions/80.07-arrow-transformations/README.md)
+- [80.08 - Funktionen als Werte](../../../20-assignments/80-functions/80.08-functions-as-values/README.md)
+- [80.09 - Callback-Funktionen](../../../20-assignments/80-functions/80.09-callback-functions/README.md)
+- [80.10 - Funktions-Vergleich](../../../20-assignments/80-functions/80.10-function-comparison/README.md)
 
 ## AVIVA-Unterrichtssitzung
 
