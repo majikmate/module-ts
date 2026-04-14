@@ -1,0 +1,240 @@
+name: Generate Missing Feedback
+
+on:
+  schedule:
+    - cron: '0 4 * * *'  
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  detect-and-generate-feedback:
+    name: Generate Missing Feedback for Assignments
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect assignments with implementation but missing feedback
+        id: detect
+        run: |
+          ASSIGNMENTS=()
+          CHANGES=false
+
+          has_ts_implementation() {
+            local file="$1"
+            if [ ! -f "$file" ]; then
+              return 1
+            fi
+
+            awk '
+              BEGIN { inblock=0 }
+              {
+                line=$0
+                while (length(line) > 0) {
+                  if (inblock) {
+                    end=index(line, "*/")
+                    if (end) {
+                      line=substr(line, end+2)
+                      inblock=0
+                    } else {
+                      line=""
+                    }
+                  } else {
+                    start=index(line, "/*")
+                    if (start) {
+                      pre=substr(line, 1, start-1)
+                      line=pre " " substr(line, start)
+                      inblock=1
+                    }
+                    line=line
+                    break
+                  }
+                }
+                if (!inblock) {
+                  sub(/\/\/.*$/, "", line)
+                  gsub(/[[:space:]]+/, "", line)
+                  if (length(line) > 0) { found=1; exit }
+                }
+              }
+              END { if (found) exit 0; else exit 1 }
+            ' "$file"
+          }
+
+          while IFS= read -r -d '' README_PATH; do
+            ASSIGNMENT_PATH=$(dirname "$README_PATH")
+            ASSIGNMENT_NAME="${ASSIGNMENT_PATH#20-assignments/}"
+            WORKSPACE_PATH="$ASSIGNMENT_PATH/workspace"
+            MAIN_PATH="$WORKSPACE_PATH/main.ts"
+            FEEDBACK_PATH="$ASSIGNMENT_PATH/FEEDBACK.md"
+
+            if [ -d "$WORKSPACE_PATH" ] && has_ts_implementation "$MAIN_PATH" && [ ! -f "$FEEDBACK_PATH" ]; then
+              ASSIGNMENTS+=("$ASSIGNMENT_NAME")
+            fi
+          done < <(find 20-assignments -type f -name README.md -print0 | sort -z -u)
+
+          ASSIGNMENTS="${ASSIGNMENTS[*]}"
+
+          if [ -n "$ASSIGNMENTS" ]; then
+            echo "Assignments with missing feedback: $ASSIGNMENTS"
+            CHANGES=true
+          else
+            echo "No assignments with missing feedback"
+          fi
+
+          echo "assignments=$ASSIGNMENTS" >> $GITHUB_OUTPUT
+          echo "changes=$CHANGES" >> $GITHUB_OUTPUT
+
+      - name: Configure Git
+        if: steps.detect.outputs.changes == 'true'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Generate missing feedback for assignments
+        if: steps.detect.outputs.assignments != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          ASSIGNMENTS: ${{ steps.detect.outputs.assignments }}
+        run: |
+          command -v copilot >/dev/null 2>&1 || curl -fsSL https://gh.io/copilot-install | sudo bash
+
+          # Configure git with autostash and ignore rebase warnings
+          git config pull.rebase true
+          git config rebase.autoStash true
+          git config advice.skippedCherryPicks false
+
+          for ASSIGNMENT in $ASSIGNMENTS; do
+            if [ -z "$ASSIGNMENT" ]; then
+              continue
+            fi
+
+            ASSIGNMENT_PATH="20-assignments/$ASSIGNMENT"
+            README_PATH="$ASSIGNMENT_PATH/README.md"
+            WORKSPACE_PATH="$ASSIGNMENT_PATH/workspace"
+
+            if [ ! -f "$README_PATH" ]; then
+              echo "⚠️ README not found for $ASSIGNMENT, skipping..."
+              continue
+            fi
+
+            if [ ! -d "$WORKSPACE_PATH" ]; then
+              echo "⚠️ Workspace not found for $ASSIGNMENT, skipping..."
+              continue
+            fi
+
+            # Pull before processing each assignment
+            echo "🔄 Pulling latest changes before processing $ASSIGNMENT..."
+            git pull origin main || echo "Pull completed with warnings (ignored)"
+
+            echo "📝 Generating missing feedback for: $ASSIGNMENT"
+
+            PROMPT_FILE=".github/prompts/GetFeedback.prompt.md"
+            PROMPT_CONTENT="$(cat "$PROMPT_FILE")"
+            PROMPT="$(printf '%s\n\nAssignment path: %s\nUse the Feedback agent and update FEEDBACK.md in that assignment folder.' "$PROMPT_CONTENT" "$ASSIGNMENT_PATH")"
+
+            # Retry logic for feedback generation
+            MAX_RETRIES=3
+            RETRY_COUNT=0
+            SUCCESS=false
+
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              if copilot \
+                --agent=Feedback \
+                --model claude-sonnet-4.5 \
+                --prompt "$PROMPT" \
+                --allow-all-tools \
+                --allow-all-paths; then
+                SUCCESS=true
+                echo "✅ Generated feedback for $ASSIGNMENT"
+                break
+              else
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                  echo "⚠️ Feedback generation failed for $ASSIGNMENT (attempt $RETRY_COUNT/$MAX_RETRIES). Retrying in 5 seconds..."
+                  sleep 5
+                else
+                  echo "❌ Failed to generate feedback for $ASSIGNMENT after $MAX_RETRIES attempts. Skipping..."
+                fi
+              fi
+            done
+
+            if [ "$SUCCESS" = false ]; then
+              continue
+            fi
+
+            # Pull, commit and push after each feedback update
+            if git status --porcelain | grep -q "FEEDBACK.md"; then
+              # Retry logic for commit and push
+              MAX_PUSH_RETRIES=3
+              PUSH_RETRY_COUNT=0
+              PUSH_SUCCESS=false
+
+              while [ $PUSH_RETRY_COUNT -lt $MAX_PUSH_RETRIES ]; do
+                echo "🔄 Pulling latest changes before committing $ASSIGNMENT..."
+                if git pull origin main || echo "Pull completed with warnings (ignored)"; then
+                  # Check if FEEDBACK.md exists and has changes that can be staged
+                  if [ -f "$ASSIGNMENT_PATH/FEEDBACK.md" ] && git status --porcelain "$ASSIGNMENT_PATH/FEEDBACK.md" | grep -q "FEEDBACK.md"; then
+                    git add "$ASSIGNMENT_PATH/FEEDBACK.md"
+                  else
+                    echo "⚠️ FEEDBACK.md not found or no changes to stage at $ASSIGNMENT_PATH, skipping commit..."
+                    break
+                  fi
+                  
+                  if git commit -m "chore: update feedback for $ASSIGNMENT" || echo "Nothing to commit"; then
+                    echo "⬆️ Pushing feedback for $ASSIGNMENT..."
+                    
+                    if git push origin main; then
+                      PUSH_SUCCESS=true
+                      echo "✅ Successfully pushed feedback for $ASSIGNMENT"
+                      break
+                    fi
+                  fi
+                fi
+                
+                PUSH_RETRY_COUNT=$((PUSH_RETRY_COUNT + 1))
+                if [ $PUSH_RETRY_COUNT -lt $MAX_PUSH_RETRIES ]; then
+                  echo "⚠️ Push failed for $ASSIGNMENT (attempt $PUSH_RETRY_COUNT/$MAX_PUSH_RETRIES). Retrying in 3 seconds..."
+                  sleep 3
+                else
+                  echo "❌ Failed to push feedback for $ASSIGNMENT after $MAX_PUSH_RETRIES attempts"
+                fi
+              done
+
+              if [ "$PUSH_SUCCESS" = false ]; then
+                echo "⚠️ Feedback was generated but could not be pushed for $ASSIGNMENT"
+              fi
+            else
+              echo "ℹ️ No feedback changes detected for $ASSIGNMENT"
+            fi
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Missing Feedback Generation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          ASSIGNMENTS="${{ steps.detect.outputs.assignments }}"
+
+          if [ -n "$ASSIGNMENTS" ]; then
+            echo "📝 Assignments with missing feedback processed:" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            for ASSIGNMENT in $ASSIGNMENTS; do
+              if [ -n "$ASSIGNMENT" ]; then
+                echo "- \`$ASSIGNMENT\`" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Missing feedback files were generated via GitHub Copilot CLI." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ No assignments with missing feedback found" >> $GITHUB_STEP_SUMMARY
+          fi
