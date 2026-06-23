@@ -163,7 +163,7 @@ console.log(x || y && z); // true
 
 #### Übung 1: Outdoor Activities (10 Min)
 
-- [40.01 - Outdoor Activities](../../20-assignments/50-logical-operators/40.01-outdoor-activities/README.md)
+- [50.01 - Outdoor Activities](../../20-assignments/50-logical-operators/50.01-outdoor-activities/README.md)
 
 **Einzelarbeit - Schüler:innen implementieren:**
 
@@ -173,7 +173,7 @@ console.log(x || y && z); // true
 
 #### Übung 2: Movie Ticket Checker (10 Min)
 
-- [40.04 - Movie Ticket Checker](../../20-assignments/50-logical-operators/40.04-movie-ticket-checker/README.md)
+- [50.04 - Movie Ticket Checker](../../20-assignments/50-logical-operators/50.04-movie-ticket-checker/README.md)
 
 **Partner:innen-Arbeit - Komplexere Bedingungen:**
 
