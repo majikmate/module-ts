@@ -5,15 +5,15 @@ TypeScript.
 
 ## Übersicht
 
-- [40.01 Outdoor-Aktivitäten](40.01-outdoor-activities/README.md) -
+- [50.01 Outdoor-Aktivitäten](50.01-outdoor-activities/README.md) -
   UND-Verknüpfung verwenden
-- [40.02 Geschwindigkeitswarnung](40.02-speed-limit-warning/README.md) -
+- [50.02 Geschwindigkeitswarnung](50.02-speed-limit-warning/README.md) -
   ODER-Verknüpfung verwenden
-- [40.03 Prüfungsberechtigung](40.03-exam-eligibility/README.md) - Komplexe
+- [50.03 Prüfungsberechtigung](50.03-exam-eligibility/README.md) - Komplexe
   Bedingungen
-- [40.04 Kinokarten-Prüfer](40.04-movie-ticket-checker/README.md) - Mehrfache
+- [50.04 Kinokarten-Prüfer](50.04-movie-ticket-checker/README.md) - Mehrfache
   Bedingungen
-- [40.05 Fitness-Empfehlung](40.05-fitness-recommendation/README.md) -
+- [50.05 Fitness-Empfehlung](50.05-fitness-recommendation/README.md) -
   Verschachtelte Logik
 
 ## Lernziele
