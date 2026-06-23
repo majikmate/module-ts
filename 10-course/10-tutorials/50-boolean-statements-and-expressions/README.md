@@ -29,11 +29,11 @@
 
 Die folgenden Aufgaben helfen beim Üben und Vertiefen der Lerninhalte:
 
-- [40.01 - Outdoor Activities](../../../20-assignments/50-logical-operators/40.01-outdoor-activities/README.md)
-- [40.02 - Speed Limit Warning](../../../20-assignments/50-logical-operators/40.02-speed-limit-warning/README.md)
-- [40.03 - Exam Eligibility](../../../20-assignments/50-logical-operators/40.03-exam-eligibility/README.md)
-- [40.04 - Movie Ticket Checker](../../../20-assignments/50-logical-operators/40.04-movie-ticket-checker/README.md)
-- [40.05 - Fitness Recommendation](../../../20-assignments/50-logical-operators/40.05-fitness-recommendation/README.md)
+- [50.01 - Outdoor Activities](../../../20-assignments/50-logical-operators/50.01-outdoor-activities/README.md)
+- [50.02 - Speed Limit Warning](../../../20-assignments/50-logical-operators/50.02-speed-limit-warning/README.md)
+- [50.03 - Exam Eligibility](../../../20-assignments/50-logical-operators/50.03-exam-eligibility/README.md)
+- [50.04 - Movie Ticket Checker](../../../20-assignments/50-logical-operators/50.04-movie-ticket-checker/README.md)
+- [50.05 - Fitness Recommendation](../../../20-assignments/50-logical-operators/50.05-fitness-recommendation/README.md)
 
 ## AVIVA-Unterrichtssitzung
 
